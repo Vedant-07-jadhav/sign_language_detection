@@ -57,6 +57,95 @@ class TemporalCNN(nn.Module):
         return self.classifier(feats)
 
 
+class Temporal_CNN_with_LSTM(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+
+        self.frame_cnn = FrameCNN()
+
+        # LSTM for temporal modeling
+        self.lstm = nn.LSTM(
+            input_size=128,   # from FrameCNN
+            hidden_size=256,  # temporal capacity
+            num_layers=1,
+            batch_first=True
+        )
+
+        self.classifier = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        # x: (B, T, 1, 112, 112)
+        B, T, C, H, W = x.shape
+
+        # Spatial feature extraction
+        x = x.view(B * T, C, H, W)
+        feats = self.frame_cnn(x)          # (B*T, 128)
+
+        # Restore temporal dimension
+        feats = feats.view(B, T, 128)      # (B, T, 128)
+
+        # Temporal modeling
+        lstm_out, (h_n, c_n) = self.lstm(feats)
+        # h_n: (num_layers, B, hidden_size)
+
+        # Use last hidden state
+        final_feat = h_n[-1]                # (B, 256)
+
+        out = self.classifier(final_feat)
+        return out
+
+
+class Temporal_1_Conv_CNN(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+
+        self.frame_cnn = FrameCNN()
+
+        # Temporal convolution over time dimension
+        self.temporal_conv = nn.Sequential( 
+            nn.Conv1d(
+                in_channels=128,   # feature dimension
+                out_channels=256,
+                kernel_size=3,
+                padding=1
+            ),
+            nn.ReLU(),
+            nn.Conv1d(
+                in_channels=256,
+                out_channels=256,
+                kernel_size=3,
+                padding=1
+            ),
+            nn.ReLU()
+        )
+
+        self.classifier = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        # x: (B, T, 1, 112, 112)
+        B, T, C, H, W = x.shape
+
+        # ---- Spatial encoding ----
+        x = x.view(B * T, C, H, W)
+        feats = self.frame_cnn(x)          # (B*T, 128)
+
+        # ---- Restore time dimension ----
+        feats = feats.view(B, T, 128)      # (B, T, 128)
+
+        # ---- Temporal convolution expects (B, C, T) ----
+        feats = feats.transpose(1, 2)      # (B, 128, T)
+
+        # ---- Temporal motion modeling ----
+        feats = self.temporal_conv(feats)  # (B, 256, T)
+
+        # ---- Temporal pooling ----
+        feats = feats.mean(dim=2)          # (B, 256)
+
+        # ---- Classification ----
+        out = self.classifier(feats)
+        return out
+
+
 def train_one_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss = 0.0
